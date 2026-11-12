@@ -1,8 +1,20 @@
 [
   {
     "id": "kissfm",
-    "name": "KissFM",
+    "name": "Kiss FM",
     "url": "https://live.kissfm.ro/kissfm.aacp",
     "icon": "kissfm.png"
+  },
+  {
+    "id": "radiozu",
+    "name": "Radio ZU",
+    "url": "https://live4ro.antenaplay.ro/radiozu/radiozu-48000.m3u8",
+    "icon": "radiozu.png"
+  },
+  {
+    "id": "digifm",
+    "name": "Digi FM",
+    "url": "http://edge76.rdsnet.ro:84/digifm/digifm.mp3",
+    "icon": "digifm.svg.webp"
   }
 ]
