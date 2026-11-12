@@ -1,9 +1,23 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { createServer, get } from 'node:http';
 import test from 'node:test';
+import { promisify } from 'node:util';
+import ffmpegPath from 'ffmpeg-static';
 import { createRadioServer } from '../server.js';
+
+const execFileAsync = promisify(execFile);
+
+async function createAudioSegment(duration = 1) {
+  const { stdout } = await execFileAsync(ffmpegPath, [
+    '-hide_banner', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100',
+    '-t', String(duration), '-c:a', 'aac', '-f', 'mpegts', 'pipe:1',
+  ], { encoding: 'buffer' });
+  return stdout;
+}
 
 function station(url, id = 'kissfm') {
   return { id, url, icon: 'kissfm.png' };
@@ -163,6 +177,111 @@ test('streams immediately and cancels upstream when the client disconnects', {
     request.on('error', reject);
   });
   await closed;
+});
+
+test('converts an HLS master playlist with relative segments into decodable MP3', {
+  timeout: 15000,
+}, async (t) => {
+  const segment = await createAudioSegment();
+  const upstreamUrl = await listen(t, createServer((req, res) => {
+    if (req.url.startsWith('/master.m3u8')) {
+      res.end('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=128000\nmedia/playlist.m3u8\n');
+    } else if (req.url === '/media/playlist.m3u8') {
+      res.end('#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nsegment.ts\n#EXT-X-ENDLIST\n');
+    } else if (req.url === '/media/segment.ts') {
+      res.writeHead(200, { 'Content-Type': 'video/mp2t' });
+      res.end(segment);
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  }));
+  const url = await listen(t, createRadioServer({
+    stations: [station(`${upstreamUrl}/master.m3u8?token=test`, 'radiozu')],
+  }));
+
+  const response = await fetch(`${url}/radiozu`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'audio/mpeg');
+  const audio = Buffer.from(await response.arrayBuffer());
+  const decoded = execFileAsync(ffmpegPath, [
+    '-hide_banner', '-loglevel', 'error',
+    '-i', 'pipe:0', '-f', 's16le', 'pipe:1',
+  ], { encoding: 'buffer' });
+  decoded.child.stdin.end(audio);
+  const { stdout } = await decoded;
+  assert.ok(stdout.length > 0, 'converted stream must decode into audio samples');
+});
+
+test('returns 502 and logs FFmpeg errors for an invalid HLS playlist', {
+  timeout: 15000,
+}, async (t) => {
+  const errors = t.mock.method(console, 'error', () => {});
+  const upstreamUrl = await listen(t, createServer((req, res) => {
+    res.end('not an HLS playlist');
+  }));
+  const url = await listen(t, createRadioServer({
+    stations: [station(`${upstreamUrl}/invalid.m3u8`, 'radiozu')],
+  }));
+
+  const response = await fetch(`${url}/radiozu`);
+  assert.equal(response.status, 502);
+  assert.equal(await response.text(), 'Radio stream unavailable\n');
+  assert.equal(errors.mock.callCount(), 1);
+  assert.match(errors.mock.calls[0].arguments[1].message, /FFmpeg exited/);
+});
+
+test('stops HLS conversion and closes the upstream connection on client disconnect', {
+  timeout: 15000,
+}, async (t) => {
+  const segment = await createAudioSegment(8);
+  let upstreamClosed;
+  const closed = new Promise((resolve) => { upstreamClosed = resolve; });
+  const upstreamUrl = await listen(t, createServer((req, res) => {
+    if (req.url === '/live.m3u8') {
+      res.end('#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8,\nsegment.ts\n');
+    } else {
+      res.on('close', upstreamClosed);
+      res.writeHead(200, { 'Content-Type': 'video/mp2t' });
+      res.write(segment);
+    }
+  }));
+  const url = await listen(t, createRadioServer({
+    stations: [station(`${upstreamUrl}/live.m3u8`, 'radiozu')],
+  }));
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  const response = await fetch(`${url}/radiozu`, { signal: controller.signal });
+  assert.equal(response.status, 200);
+  const { value, done } = await response.body.getReader().read();
+  assert.ok(!done && value.length > 0);
+  controller.abort();
+  await closed;
+});
+
+test('cancels HLS startup when a listener disconnects before audio is available', {
+  timeout: 5000,
+}, async (t) => {
+  const errors = t.mock.method(console, 'error', () => {});
+  let upstreamRequested;
+  const requested = new Promise((resolve) => { upstreamRequested = resolve; });
+  let upstreamClosed;
+  const closed = new Promise((resolve) => { upstreamClosed = resolve; });
+  const upstreamUrl = await listen(t, createServer((req, res) => {
+    res.on('close', upstreamClosed);
+    upstreamRequested();
+  }));
+  const url = await listen(t, createRadioServer({
+    stations: [station(`${upstreamUrl}/pending.m3u8`, 'radiozu')],
+  }));
+  const request = get(`${url}/radiozu`);
+  request.on('error', (error) => assert.equal(error.code, 'ECONNRESET'));
+  t.after(() => request.destroy());
+
+  await requested;
+  request.destroy();
+  await closed;
+  assert.equal(errors.mock.callCount(), 0);
 });
 
 test('creates independent stream and icon endpoints for configured stations', async (t) => {

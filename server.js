@@ -4,6 +4,7 @@ import { basename, extname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
+import { openHlsStream } from './hls-stream.js';
 import configuredStations from './stations.json' with { type: 'json' };
 
 const UPSTREAM_TIMEOUT_MS = 10_000;
@@ -94,22 +95,30 @@ export function createRadioServer({ stations = configuredStations } = {}) {
     }, UPSTREAM_TIMEOUT_MS);
 
     try {
-      const upstream = await fetch(station.url, {
-        signal: controller.signal,
-      });
+      let audio;
+      let contentType;
+      if (new URL(station.url).pathname.toLowerCase().endsWith('.m3u8')) {
+        audio = await openHlsStream(station.url, { signal: controller.signal });
+        contentType = 'audio/mpeg';
+      } else {
+        const upstream = await fetch(station.url, {
+          signal: controller.signal,
+        });
+
+        if (!upstream.ok || !upstream.body) {
+          throw new Error(`Upstream returned HTTP ${upstream.status}`);
+        }
+        audio = Readable.fromWeb(upstream.body);
+        contentType = upstream.headers.get('content-type') || 'audio/aac';
+      }
       clearTimeout(timeout);
 
-      if (!upstream.ok || !upstream.body) {
-        throw new Error(`Upstream returned HTTP ${upstream.status}`);
-      }
-
       res.writeHead(200, {
-        'Content-Type': upstream.headers.get('content-type') || 'audio/aac',
+        'Content-Type': contentType,
         'Cache-Control': 'no-store',
         'X-Accel-Buffering': 'no',
       });
       res.flushHeaders();
-      const audio = Readable.fromWeb(upstream.body);
       audio.once('error', (error) => {
         if (!controller.signal.aborted) {
           console.error(`Station ${station.id} stream interrupted:`, error);

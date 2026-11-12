@@ -1,11 +1,12 @@
 # Stream API
 
-A dependency-free Node.js proxy for configurable live radio streams.
+A Node.js proxy for configurable live radio streams.
 Requires Node.js 22 or later.
 
 ## Run
 
 ```powershell
+npm install
 npm start
 ```
 
@@ -61,10 +62,25 @@ the listener disconnects. Upstream connection/header failures return HTTP 502
 (with a 10-second header timeout); interruptions after streaming starts close
 the connection. Other routes return 404 and unsupported methods return 405.
 
+### HLS streams (Radio ZU)
+
+URLs whose pathname ends in `.m3u8` (including URLs with query parameters)
+are automatically converted from HLS to a continuous 128 kbps MP3 stream
+with content type `audio/mpeg`. For example, `/radiozu` can be used directly
+in an HTML audio player, without an HLS player library.
+
+[ffmpeg-static](https://www.npmjs.com/package/ffmpeg-static) downloads the
+platform-specific FFmpeg binary during `npm install`; a separate system
+FFmpeg installation is not required. Each HLS listener runs one conversion
+process, which is stopped on disconnect. Allow for the associated CPU usage
+when serving many listeners. Direct AAC/MP3 streams are proxied unchanged.
+The 10-second startup timeout also applies while waiting for HLS output.
+
 ## Test
 
 ```powershell
 npm test
 ```
 
-Tests use a local upstream server and do not require the live radio station.
+Tests use local upstream servers and generated audio, including decoding the
+HLS conversion output. They do not require live radio stations.
