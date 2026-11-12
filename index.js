@@ -11,5 +11,5 @@ server.on('error', (error) => {
   process.exitCode = 1;
 });
 server.listen(port, () => {
-  console.log(`Kiss FM stream: http://localhost:${server.address().port}/kissfm`);
+  console.log(`Stream API listening at http://localhost:${server.address().port}`);
 });
