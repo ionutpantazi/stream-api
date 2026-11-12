@@ -76,6 +76,29 @@ process, which is stopped on disconnect. Allow for the associated CPU usage
 when serving many listeners. Direct AAC/MP3 streams are proxied unchanged.
 The 10-second startup timeout also applies while waiting for HLS output.
 
+#### Ubuntu deployment and FFmpeg failures
+
+Install dependencies on the target server rather than copying `node_modules`
+from Windows or another platform. To use Ubuntu's FFmpeg instead of the bundled
+binary, install it and set the `ffmpeg-static` package's `FFMPEG_BIN` override
+before starting Node:
+
+```bash
+sudo apt-get update
+sudo apt-get install ffmpeg
+FFMPEG_BIN=/usr/bin/ffmpeg npm start
+```
+
+Set `FFMPEG_BIN` in the service environment as well when running under a process
+manager or systemd. The server logs the selected executable path, exit code,
+termination signal and available FFmpeg diagnostics when conversion fails.
+A null exit code means no numeric exit status was received; use the signal
+to diagnose the failure instead. `SIGKILL` can indicate an OS/container
+memory limit or another external kill; check the kernel/service logs.
+`SIGSEGV` or `SIGILL` can indicate a binary crash or CPU incompatibility;
+try the distribution-provided FFmpeg. These signals alone do not prove a cause.
+Normal listener disconnects do not log a conversion failure.
+
 ## Test
 
 ```powershell

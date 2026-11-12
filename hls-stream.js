@@ -44,12 +44,23 @@ export async function openHlsStream(url, { signal }) {
       converter.kill();
     }
   });
-  converter.once('close', (code) => {
+  converter.once('close', (code, terminationSignal) => {
     signal.removeEventListener('abort', onAbort);
-    if (code === 0) {
+    if (signal.aborted) {
+      output.destroy(signal.reason);
+    } else if (code === 0) {
       output.end();
     } else {
-      output.destroy(new Error(`FFmpeg exited with code ${code}: ${diagnostics.trim()}`));
+      const reason = terminationSignal
+        ? `terminated by signal ${terminationSignal}`
+        : `exited with code ${code}`;
+      const detail = diagnostics.trim() || 'no stderr output';
+      const error = new Error(`FFmpeg ${reason}: ${detail}`);
+      error.code = 'ERR_FFMPEG_EXIT';
+      error.exitCode = code;
+      error.signal = terminationSignal;
+      error.path = ffmpegPath;
+      output.destroy(error);
     }
   });
 
